@@ -52,3 +52,20 @@ exports.login = async(req,res) => {
         return res.status(500).json("Internal Server Error")
     }
 }
+
+exports.me = async(req,res) => {
+    try {
+        const {id} = req.body
+        const user = await User.findByPk(id,{
+            attributes: ['first_name', 'last_name', 'email']
+        })
+        if(user){
+            return res.status(200).json(user)
+        }else{
+            return res.status(400).json({"message": "User not found"})
+        }
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json("Internal Server Error")
+    }
+}

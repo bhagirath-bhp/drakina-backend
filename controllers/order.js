@@ -54,13 +54,16 @@ exports.addOrder = async(req,res) => {
 
         for(const item of cartItems){
             console.log("Product quantity:",item.product.quantity,"\nCart quantity:",item.quantity);
-            // console.log("hello");
+            console.log("hello");
             const product = await Product.findByPk(item.product.productId,{
                 lock: t.LOCK.UPDATE
             })
 
+            console.log(product);
+
             if(!product || item.product.quantity < item.quantity){
                 // if(item.product.quantity == null) continue
+                console.log("hit1");
                 return res.status(400).json("insufficient quantity")
             }
 
@@ -68,6 +71,8 @@ exports.addOrder = async(req,res) => {
                 {quantity: item.product.quantity - item.quantity},
                 {where: {productId: item.product.productId}, transaction:t}
             )
+
+            console.log("hit2");
  
             await OrderItem.create({
                 orderId: order.orderId,
@@ -76,6 +81,8 @@ exports.addOrder = async(req,res) => {
                 price: item.product.price,
                 spellId: item.spell?.spellId
             }, {transaction: t})
+
+            console.log("hit3");
 
             lineItems.push({
                 quantity: item.quantity,
@@ -115,7 +122,8 @@ exports.getAllOrdersForAUser = async(req,res)=> {
 
         const orders = await Order.findAndCountAll({
             where:{
-                userId
+                userId,
+                payment_status: 'complete'
             },
             include:[
                 {
@@ -240,6 +248,9 @@ exports.getAllOrdersForAdmin = async(req,res) => {
 
         const orders = await Order.findAndCountAll({
             attributes: ['orderId','totalAmount'],
+            where:{
+                payment_status: "complete"
+            },
             include:[
                 {
                     model: OrderItem,

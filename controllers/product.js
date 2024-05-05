@@ -74,7 +74,7 @@ exports.addCollection = async(req,res) => {
     try {
         const {name, hasSpells} = req.body 
 
-        if (!name || !hasSpells){
+        if (!name || hasSpells.length == 0){
             return res.status(400).json("name or hasSpells attribute missing")
         }
 

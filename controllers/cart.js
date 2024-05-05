@@ -9,7 +9,8 @@ User.hasOne(Cart,{foreignKey: 'userId', onDelete: 'CASCADE', onUpdate:'CASCADE'}
 Cart.belongsTo(User,{foreignKey: 'userId'})
 CartItems.belongsTo(Product,{foreignKey: 'productId'})
 Cart.hasMany(CartItems,{foreignKey: 'cartId'})
-CartItems.hasOne(Spell, {foreignKey: "spellId"})
+CartItems.belongsTo(Spell, {foreignKey: "spellId"})
+Spell.hasMany(CartItems, {foreignKey: 'spellId'})
 Product.hasMany(Image,{foreignKey: 'productId'})
 Image.belongsTo(Product,{foreignKey:'productId',onDelete: 'CASCADE',onUpdate: 'CASCADE'})
   
@@ -126,18 +127,18 @@ exports.getCart = async(req,res) => {
             include:[
                 {
                     model: CartItems,
-                    include:[
+                    include: [
                         {
                             model: Product,
-                            attributes:['productId','name','price'],
-                            include:[{
+                            attributes: ['productId', 'name', 'price'],
+                            include: [{
                                 model: Image,
-                                attributes:['imageURL']
+                                attributes: ['imageURL']
                             }]
                         },
                         {
                             model: Spell,
-                            attributes: ['name']
+                            attributes: ['spellId', 'name']
                         }
                     ],
                     attributes:['cartId','quantity']
