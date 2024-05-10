@@ -10,12 +10,15 @@ const Image = require('../models/image')
 const Spells = require('../models/spells')
 const { createSession } = require('../utils/payment')
 const stripe = require('stripe')(process.env.STRIPE_SK)
+const {QueryTypes} = require('sequelize')
 
 Order.belongsTo(User,{foreignKey: 'userId'})
 Order.hasMany(OrderItem,{foreignKey: 'orderId'})
 OrderItem.belongsTo(Order,{foreignKey:'orderId'})
 OrderItem.belongsTo(Product,{foreignKey: 'productId'})
+CartItems.belongsTo(Spells, {foreignKey: 'spellId'})
 OrderItem.hasOne(Spells, {foreignKey: 'spellId'})
+Spells.hasMany(OrderItem, {foreignKey: 'spellId'})
 
 exports.addOrder = async(req,res) => {
     const t = await sequelize.transaction({
@@ -30,22 +33,31 @@ exports.addOrder = async(req,res) => {
         if(!cart){
             return res.status(404).json("cart not found")
         }
-        const cartItems = await CartItems.findAll({
-            where:{cartId: cart.cartId},
-            include:[
-                {
-                    model: Product,
-                    attributes: ['productId','name','description','quantity','price']
-                },
-                {
-                    model: Spells,
-                    attributes: ["spellId"]
-                }
-            ],
-            transaction:t,
-            attributes: ['itemId','cartId','quantity']
-        })
-
+        const cartItems = await sequelize.query(`
+            SELECT 
+                "ct"."itemId",
+                "ct"."cartId",
+                "ct"."quantity",
+                "products"."productId",
+                "products"."name" AS productName,
+                "products"."description" AS productDescription,
+                "products"."quantity" AS productQuantity,
+                "products"."price" AS productPrice,
+                "spells"."spellId"
+            FROM 
+                "cartitems" AS "ct"
+            LEFT JOIN 
+                "products" AS "products" ON "ct"."productId" = "products"."productId"
+            LEFT JOIN 
+                "spells" AS "spells" ON "ct"."spellId" = "spells"."spellId"
+            WHERE 
+                "ct"."cartId" = :cartId
+        `, {
+            replacements: { cartId: cart.cartId },
+            type: sequelize.QueryTypes.SELECT,
+            nest: true,
+            transaction: t
+            });
         console.log(cartItems);
 
         const order = await Order.create({userId}, {transaction:t})
@@ -53,36 +65,31 @@ exports.addOrder = async(req,res) => {
         let lineItems=[]
 
         for(const item of cartItems){
-            console.log("Product quantity:",item.product.quantity,"\nCart quantity:",item.quantity);
+            console.log("Product quantity:",item.productquantity,"\nCart quantity:",item.quantity);
             console.log("hello");
-            const product = await Product.findByPk(item.product.productId,{
+            const product = await Product.findByPk(item.productId,{
                 lock: t.LOCK.UPDATE
             })
 
-            console.log(product);
-
-            if(!product || item.product.quantity < item.quantity){
+            if(!product || item.productquantity < item.quantity){
                 // if(item.product.quantity == null) continue
-                console.log("hit1");
                 return res.status(400).json("insufficient quantity")
             }
 
             await Product.update(
-                {quantity: item.product.quantity - item.quantity},
-                {where: {productId: item.product.productId}, transaction:t}
+                {quantity: item.productquantity - item.quantity},
+                {where: {productId: item.productId}, transaction:t}
             )
 
-            console.log("hit2");
+            console.log("spell: ", item.spellId);
  
             await OrderItem.create({
                 orderId: order.orderId,
-                productId: item.product.productId,
+                productId: item.productId,
                 quantity: item.quantity,
-                price: item.product.price,
-                spellId: item.spell?.spellId
+                price: item.productprice,
+                spellId: item.spellId
             }, {transaction: t})
-
-            console.log("hit3");
 
             lineItems.push({
                 quantity: item.quantity,
@@ -239,60 +246,153 @@ exports.getOrderDetails = async(req,res) => {
     }
 }
 
-exports.getAllOrdersForAdmin = async(req,res) => {
+exports.getAllOrdersForAdmin = async (req, res) => {
     try {
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (page - 1) * limit;
+  
+      const countQuery = `
+        SELECT COUNT(DISTINCT "orders"."orderId") AS total
+        FROM "orders"
+        JOIN "orderitems" ON "orders"."orderId" = "orderitems"."orderId"
+        WHERE "orders"."payment_status" = 'complete'
+      `;
+  
+      const [countResult] = await sequelize.query(countQuery);
+      const totalRows = countResult[0].total;
+  
+      const response = await sequelize.query(
+        `
+        SELECT
+          "orders"."orderId",
+          "orders"."totalAmount",
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'quantity', "orderitems"."quantity",
+              'price', "orderitems"."price",
+              'product', JSON_BUILD_OBJECT(
+                'name', "orderitems->product"."name"
+              ),
+              'spell', JSON_BUILD_OBJECT(
+                'name', "orderitems->spell"."name"
+              )
+            )
+          ) AS "orderitems",
+          JSON_BUILD_OBJECT(
+            'first_name', "user"."first_name",
+            'last_name', "user"."last_name",
+            'email', "user"."email"
+          ) AS "user"
+        FROM "orders"
+        JOIN "orderitems" ON "orders"."orderId" = "orderitems"."orderId"
+        LEFT OUTER JOIN "products" AS "orderitems->product" ON "orderitems"."productId" = "orderitems->product"."productId"
+        LEFT OUTER JOIN "spells" AS "orderitems->spell" ON "orderitems"."spellId" = "orderitems->spell"."spellId"
+        JOIN "users" AS "user" ON "orders"."userId" = "user"."userId"
+        WHERE "orders"."payment_status" = 'complete'
+        GROUP BY "orders"."orderId", "orders"."totalAmount", "user"."first_name", "user"."last_name", "user"."email"
+        ORDER BY "orders"."createdAt" DESC
+        LIMIT :limit
+        OFFSET :offset;
+        `,
+        {
+          replacements: { limit, offset },
+          nest: true,
+          type: QueryTypes.SELECT,
+        }
+      );
+  
+      const pagination = {
+        page: parseInt(page),
+        pageSize: parseInt(limit),
+        totalProducts: totalRows,
+        totalPages: Math.ceil(totalRows / limit),
+      };
+  
+      return res.status(200).json({ orders: response, pagination });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json('Internal Server Error');
+    }
+};
 
-        const page = parseInt(req.query.page) || 1;
-        const pageSize = parseInt(req.query.pageSize) || 6;
-        const offset = (page - 1) * pageSize;
-
-        const orders = await Order.findAndCountAll({
-            attributes: ['orderId','totalAmount'],
-            where:{
-                payment_status: "complete"
-            },
-            include:[
-                {
-                    model: OrderItem,
-                    attributes: ['quantity','price'],
-                    include:[
-                        {
-                            model: Product,
-                            attributes: ['name']
-                        },
-                        {
-                            model: Spells,
-                            attributes:['name']
-                        }
-                    ]
-                },
-                {
-                    model: User,
-                    attributes: ['first_name','last_name','email'],
-                }
-            ],
-            limit: pageSize,
-            offset: offset,
+exports.test = async(req,res) => {
+    try {
+        const {userId} = req.body
+        const cart = await Cart.findOne({
+            where: {userId},
         })
+        if(!cart){
+            return res.status(404).json("cart not found")
+        }
 
+        const cartItems = await sequelize.query(`
+            SELECT 
+                "ct"."itemId",
+                "ct"."cartId",
+                "ct"."quantity",
+                "products"."productId",
+                "products"."name" AS productName,
+                "products"."description" AS productDescription,
+                "products"."quantity" AS productQuantity,
+                "products"."price" AS productPrice,
+                "spells"."spellId"
+            FROM 
+                "cartitems" AS "ct"
+            LEFT JOIN 
+                "products" AS "products" ON "ct"."productId" = "products"."productId"
+            LEFT JOIN 
+                "spells" AS "spells" ON "ct"."spellId" = "spells"."spellId"
+            WHERE 
+                "ct"."cartId" = :cartId
+        `, {
+            replacements: { cartId: cart.cartId },
+            type: sequelize.QueryTypes.SELECT,
+            nest: true
+            });
 
-        if(orders.count ==  0) return res.status(404).json("no orders found")
+            const order = await Order.create({userId})
 
-    const totalPages = Math.ceil(orders.count / pageSize);
+            let lineItems = []
 
+            for(const item of cartItems){
+                console.log("Product quantity:",item.productquantity,"\nCart quantity:",item.quantity);
+                console.log("hello");
+                const product = await Product.findByPk(item.productId)
+    
+                if(!product || item.productquantity < item.quantity){
+                    // if(item.product.quantity == null) continue
+                    return res.status(400).json("insufficient quantity")
+                }
+    
+                await Product.update(
+                    {quantity: item.productquantity - item.quantity},
+                    {where: {productId: item.productId},}
+                )
+    
+                console.log("spell: ", item.spellId);
+     
+                await OrderItem.create({
+                    orderId: order.orderId,
+                    productId: item.productId,
+                    quantity: item.quantity,
+                    price: item.productprice,
+                    spellId: item.spellId
+                })
 
-        const response = {
-            orders: orders.rows,
-            pagination: {
-                page: page,
-                pageSize: pageSize,
-                totalProducts: orders.count,
-                totalPages: totalPages,
-            },
-        };
+                lineItems.push({
+                    quantity: item.quantity,
+                    price_data:{
+                        currency: "inr",
+                        product_data:{
+                            name: product.name
+                        },
+                        tax_behavior: "inclusive",
+                        unit_amount_decimal: product.price * 100
+                    }
+                })
+            }
 
-        return res.status(200).json(response);
-
+            return res.status(200).json(lineItems)
     } catch (error) {
         console.error(error);
         return res.status(500).json("Internal Server Error")

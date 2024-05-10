@@ -56,7 +56,8 @@ exports.login = async(req,res) => {
 exports.me = async(req,res) => {
     try {
         const {id} = req.body
-        const user = await User.findByPk(id,{
+        let userId = Number(id)
+        const user = await User.findByPk(userId,{
             attributes: ['first_name', 'last_name', 'email']
         })
         if(user){
