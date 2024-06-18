@@ -23,4 +23,4 @@ RUN --mount=type=bind,source=package.json,target=package.json \
     npm ci --omit=dev
 USER node
 COPY . .
-CMD node index.js
+CMD ["sh", "-c", "npm run migrate && node index.js"]
